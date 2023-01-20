@@ -1,0 +1,200 @@
+# ############################################################################
+# Model: ASR with attention-based ASR
+# Training data: FINNISH PARLIAMENT (First release) 30min/spk subset
+# Encoder: CRDNN
+# Decoder: GRU + beamsearch + RNNLM
+# Authors: Aku Rouhe 2021 
+# ############################################################################
+
+# Seed needs to be set at top of yaml, before objects with parameters are instantiated
+seed: 2602
+__set_seed: !apply:torch.manual_seed [!ref <seed>]
+
+trainshards: !apply:glob.glob ["./shards/train_all/shard-000*.tar"]
+validshards: !apply:glob.glob ["./shards/dev_2k/shard-000*.tar"]
+# data_folder_rirs: ./augmentation_data # noise/ris dataset will automatically be downloaded here
+num_units: !PLACEHOLDER
+output_folder: !ref exp/chain/CRDNN-AA/<seed>-<num_units>units
+save_folder: !ref <output_folder>/save
+train_log: !ref <output_folder>/train_log.txt
+
+tmpstorage: /tmp
+# FST stuff:
+expname: "all-finnish"
+numfstdir: exp/chain/graph/train_all/
+numfsttmpdir: !ref <tmpstorage>/sb-train-fsts-<expname>
+valid_numfstdir: exp/chain/graph/dev_2k/
+valid_numfsttmpdir: !ref <tmpstorage>/sb-valid-fsts-<expname>
+denominator_graph: !new:pychain.graph.ChainGraph
+    fst: !apply:simplefst.StdVectorFst.read
+        - exp/chain/graph/den.fst
+    initial_mode: leaky
+    final_mode: ones 
+
+chain_loss: !new:pychain.loss.ChainLoss
+    - !ref <denominator_graph>
+    - 0.0001
+# FST Helpers:
+transgetter: !new:operator.attrgetter
+    - "num_transitions"
+stategetter: !new:operator.attrgetter
+    - "num_states"
+
+# Multi-task weighting:
+xent_scale: 0.1
+lin_out_name: "lfmmi_lin_out"
+outnorm_scale: 0.0005
+
+# Test files:
+prior_file: !ref <output_folder>/prior.pth
+#test_max_key: "unixtime"
+test_min_key: "loss"
+testdir: data/test_clean
+test_probs_out: !ref <output_folder>/test_probs.ark
+subtract_prior: True
+normalize_out: False
+
+# The train logger writes training statistics to a file, as well as stdout.
+train_logger: !new:speechbrain.utils.train_logger.FileTrainLogger
+    save_file: !ref <train_log>
+
+# Training parameters
+number_of_epochs: 60
+nonfinite_patience: 100
+
+# Feature parameters
+sample_rate: 16000
+n_fft: 400
+n_mels: 80
+subsampling: 3
+
+dynamic_batch_kwargs:
+train_dynamic_batcher: !name:speechbrain.dataio.iterators.dynamic_bucketed_batch
+    max_sample_len: !ref <sample_rate> * 60
+    sampler_kwargs:
+        target_batch_numel: !ref <sample_rate> * 80 # 16000*120=2minutes
+        max_batch_numel: !ref <sample_rate> * 124
+    len_key: 'wav'
+valid_dynamic_batcher: !name:speechbrain.dataio.iterators.dynamic_bucketed_batch
+    len_key: "wav"
+    sampler_kwargs:
+        target_batch_numel: !ref <sample_rate> * 200
+        max_batch_numel: !ref <sample_rate> * 220
+    max_sample_len: !ref <sample_rate> * 25
+    drop_end: False
+
+train_loader_kwargs:
+    num_workers: 4
+    looped_nominal_epoch: 10000
+    batch_size: null
+prior_loader_kwargs:
+    num_workers: 0
+    looped_nominal_epoch: 2000
+    batch_size: null
+ckpt_interval_minutes: 30 # save checkpoint every N min
+label_smoothing: 0.1
+lr: 0.0001
+
+# Model parameters
+activation: !name:torch.nn.LeakyReLU
+dropout: 0.15
+cnn_blocks: 2
+cnn_channels: (64, 128)
+inter_layer_pooling_size: (2, 2)
+cnn_kernelsize: (3, 3)
+time_pooling_size: 3
+rnn_class: !name:speechbrain.nnet.RNN.LSTM
+rnn_layers: 3
+rnn_neurons: 512
+rnn_bidirectional: True
+dnn_blocks: 1
+dnn_neurons: 512
+output_neurons: !ref <num_units>  #Number of tokens (same as LM)
+
+# The first object passed to the Brain class is this "Epoch Counter"
+# which is saved by the Checkpointer so that training can be resumed
+# if it gets interrupted at any point.
+epoch_counter: !new:speechbrain.utils.epoch_loop.EpochCounter
+    limit: !ref <number_of_epochs>
+
+# Feature extraction
+compute_features: !new:speechbrain.lobes.features.Fbank
+    sample_rate: !ref <sample_rate>
+    n_fft: !ref <n_fft>
+    n_mels: !ref <n_mels>
+
+# Feature normalization (mean and std)
+normalize: !new:speechbrain.processing.features.InputNormalization
+    norm_type: global
+
+# The CRDNN model is an encoder that combines CNNs, RNNs, and DNNs.
+encoder: !new:speechbrain.lobes.models.CRDNN.CRDNN
+    input_shape: [null, null, !ref <n_mels>]
+    activation: !ref <activation>
+    dropout: !ref <dropout>
+    cnn_blocks: !ref <cnn_blocks>
+    cnn_channels: !ref <cnn_channels>
+    cnn_kernelsize: !ref <cnn_kernelsize>
+    inter_layer_pooling_size: !ref <inter_layer_pooling_size>
+    time_pooling: True
+    using_2d_pooling: False
+    time_pooling_size: !ref <time_pooling_size>
+    rnn_class: !ref <rnn_class>
+    rnn_layers: !ref <rnn_layers>
+    rnn_neurons: !ref <rnn_neurons>
+    rnn_bidirectional: !ref <rnn_bidirectional>
+    rnn_re_init: True
+    dnn_blocks: !ref <dnn_blocks>
+    dnn_neurons: !ref <dnn_neurons>
+    use_rnnp: False
+
+# Linear transformations on the top of the decoder.
+xent_lin_out: !new:speechbrain.nnet.linear.Linear
+    input_size: !ref <dnn_neurons>
+    n_neurons: !ref <num_units>
+lfmmi_lin_out: !new:speechbrain.nnet.linear.Linear
+    input_size: !ref <dnn_neurons>
+    n_neurons: !ref <num_units>
+
+# Final softmax (for log posteriors computation).
+log_softmax: !new:speechbrain.nnet.activations.Softmax
+    apply_log: True
+
+# Objects in "modules" dict will have their parameters moved to the correct
+# device, as well as having train()/eval() called on them by the Brain class
+modules:
+    encoder: !ref <encoder>
+    xent_lin_out: !ref <xent_lin_out>
+    lfmmi_lin_out: !ref <lfmmi_lin_out>
+    normalize: !ref <normalize>
+
+lr_annealing: !new:local.NoSchedule
+    lr: !ref <lr>
+
+opt_class: !name:torch.optim.Adam
+      lr: !ref <lr> 
+
+# Functions that compute the statistics to track during the validation step.
+accuracy_computer: !name:speechbrain.utils.Accuracy.AccuracyStats
+
+# This object is used for saving the state of training both so that it
+# can be resumed if it gets interrupted, and also so that the best checkpoint
+# can be later loaded for evaluation or inference.
+checkpointer: !new:speechbrain.utils.checkpoints.Checkpointer
+    checkpoints_dir: !ref <save_folder>
+    recoverables:
+        encoder: !ref <encoder>
+        xent_lin_out: !ref <xent_lin_out>
+        lfmmi_lin_out: !ref <lfmmi_lin_out>
+        normalizer: !ref <normalize>
+        counter: !ref <epoch_counter>
+
+#ckpt_finder: !new:speechbrain.utils.checkpoints.Checkpointer
+#    checkpoints_dir: !ref <pretrain_from>/save
+
+#pretrainer: !new:speechbrain.utils.parameter_transfer.Pretrainer
+#collect_in: !ref <output_folder>/pretraining_files
+#    loadables:
+#        encoder: !ref <encoder>
+#        lin_out: !ref <xent_lin_out> 
+#        normalizer: !ref <normalize> 

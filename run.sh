@@ -65,7 +65,7 @@ if [ $stage -le 2 ]; then
 fi
 
 if [ $stage -le 3 ]; then
-  for part in lp-test lp-dev lp-train-all parl-2008-2020-train; do
+  for part in lp-test lp-dev lp-train-all parl-2008-2020-train parl-dev-seen parl-dev-unseen parl-test-seen parl-test-unseen parl-test-2020; do
     steps/make_mfcc.sh --cmd "$train_cmd --time 4:0:0" --nj 40 data/$part exp/make_mfcc/$part $mfccdir
     steps/compute_cmvn_stats.sh data/$part exp/make_mfcc/$part $mfccdir
   done
@@ -74,6 +74,12 @@ fi
 if [ $stage -le 4 ]; then
   utils/combine_data.sh \
     data/train_all data/lp-train-all data/parl-2008-2020-train
+  utils/combine_data.sh \
+    data/dev_all data/lp-dev data/parl-dev-seen/ data/parl-dev-unseen/
+  utils/combine_data.sh \
+    data/parl-dev-all data/parl-dev-seen/ data/parl-dev-unseen/  
+  # Create a smaller, more manageable size dev set:
+  utils/subset_data_dir.sh data/dev_all 2000 data/dev_2k
 fi
 
 if [ $stage -le 5 ]; then
@@ -97,19 +103,20 @@ if [ $stage -le 6 ]; then
     data/train_all/ data/local/dict_train_all data/lang_train
 fi
 
-#if [ $stage -le 7 ]; then
-#  if [ ! -d subword-kaldi ]; then
-#    echo "Need subword-kaldi, cloning"
-#    git clone https://github.com/aalto-speech/subword-kaldi
-#  fi
-#
-#  local/train_lm.sh \
-#    --BPE_units 5000 \
-#    --stage 0 \
-#    --traindata data/train_960 \
-#    --validdata data/dev_all \
-#    train data/lang_bpe.5000.varikn
-#fi
+if [ $stage -le 7 ]; then
+  if [ ! -d subword-kaldi ]; then
+    echo "Need subword-kaldi, cloning"
+    git clone https://github.com/aalto-speech/subword-kaldi
+  fi
+
+  local/train_lm.sh \
+    --varikn_cmd "slurm.pl --mem 24G --time 2:0:0" \
+    --BPE_units 5000 \
+    --stage 0 \
+    --traindata data/train_all \
+    --validdata data/dev_all \
+    train data/lang_bpe.5000.varikn
+fi
 
 if [ $stage -le 8 ]; then
   # train a monophone system
@@ -174,30 +181,28 @@ if [ $stage -le 18 ]; then
   #  > source path.sh
   #  > srun --mem 20G --gres=nvme:20 --time 1:0:0 -c4 \
   #  >   --account project_2006368 split_data.sh data/train_all 180
-  steps/align_fmllr.sh --nj 180 --cmd "$train_cmd --time 4:0:0" \
+  steps/align_fmllr.sh --nj 180 --cmd "$train_cmd --mem 4G --time 4:0:0" \
                        data/train_all data/lang_train exp/tri5b exp/tri5b_ali_all
 
-  steps/train_quick.sh --cmd "$train_cmd" \
+  steps/train_quick.sh --cmd "$train_cmd --mem 4G" \
                        12000 300000 data/train_all data/lang_train exp/tri5b_ali_all exp/tri6b
 
 fi
 
-exit
 
 if [ $stage -le 19 ]; then
-  $basic_cmd --mem 16G exp/tri6b/graph_bpe.5000.varikn/log/mkgraph.log utils/mkgraph.sh \
+  $mkgraph_cmd --mem 16G exp/tri6b/graph_bpe.5000.varikn/log/mkgraph.log utils/mkgraph.sh \
     data/lang_bpe.5000.varikn/ exp/tri6b/ exp/tri6b/graph_bpe.5000.varikn
-  steps/decode_fmllr.sh --cmd "$basic_cmd" --nj 8 \
-    exp/tri6b/graph_bpe.5000.varikn data/dev_clean exp/tri6b/decode_dev_clean_bpe.5000.varikn
-  steps/decode_fmllr.sh --cmd "$basic_cmd" --nj 8 \
-    exp/tri6b/graph_bpe.5000.varikn data/dev_other exp/tri6b/decode_dev_other_bpe.5000.varikn
+  steps/decode_fmllr.sh --cmd "$decode_cmd" --nj 8 \
+    exp/tri6b/graph_bpe.5000.varikn data/dev_all exp/tri6b/decode_dev_all_bpe.5000.varikn
+  exit
 fi
 
 if [ $stage -le 20 ]; then
-  steps/align_fmllr.sh --nj 100 --cmd "$train_cmd" \
+  steps/align_fmllr.sh --nj 180 --cmd "$train_cmd --mem 4G --time 4:0:0" \
     data/train_all data/lang_train exp/tri6b exp/tri6b_ali_all
   steps/align_fmllr.sh --nj 8 --cmd "$train_cmd" \
-    data/dev_all data/lang_train exp/tri6b exp/tri6b_ali_dev_all
+    data/dev_2k data/lang_train exp/tri6b exp/tri6b_ali_dev_2k
 fi
 
 if [ $stage -le 21 ]; then
@@ -223,60 +228,57 @@ if [ $stage -le 21 ]; then
 fi
 
 if [ $stage -le 22 ]; then
-  local/chain/build_new_tree.sh exp/chain/tree
+  local/chain/build_new_tree.sh \
+    --traindata data/train_all \
+    --trainali exp/tri6b_ali_all \
+    --validali exp/tri6b_ali_dev_2k \
+    --num_leaves 4000 \
+    exp/chain/tree
 fi
 
 if [ $stage -le 23 ]; then
-  srun --mem 24G --time 1-12:0:0 -c8 \
-    local/chain/make_shards.py 100 shards/train_all \
-      --num-proc 8 \
-      --wavscp data/train_all/split100/JOB/wav.scp \
-      --text data/train_all/split100/JOB/text \
+  srun --mem 24G --time 2-0:0:0 -c 16 --account project_2006368 \
+    local/chain/make_shards.py 180 shards/train_all \
+      --num-proc 16 \
+      --segments data/train_all/split180/JOB/segments \
+                 data/train_all/split180/JOB/wav.scp \
+      --text data/train_all/split180/JOB/text \
       --aliark "gunzip -c exp/chain/tree/ali.JOB.gz | ali-to-pdf exp/chain/tree/final.mdl ark:- ark:- |"
 
-  srun --mem 6G --time 12:0:0 -c2 \
-    local/chain/make_shards.py 8 shards/dev_all \
+  srun --mem 6G --time 12:0:0 -c 2 --account project_2006368 \
+    local/chain/make_shards.py 8 shards/dev_2k \
       --num-proc 2 \
-      --wavscp data/dev_all/split8/JOB/wav.scp \
-      --text data/dev_all/split8/JOB/text \
+      --segments data/dev_2k/split8/JOB/segments \
+                 data/dev_2k/split8/JOB/wav.scp \
+      --text data/dev_2k/split8/JOB/text \
       --aliark "gunzip -c exp/chain/tree/ali.valid.JOB.gz | ali-to-pdf exp/chain/tree/final.mdl ark:- ark:- |"
 fi
 
 if [ $stage -le 24 ]; then
-  local/chain/prepare_graph_clustered.sh
+  local/chain/prepare_graph_clustered.sh \
+    --trainset train_all \
+    --validset dev_2k
 fi
 
 if [ $stage -le 25 ]; then
-  local/chain/run_training.sh
+  sbatch local/chain/run_training.sh
+  exit
 fi
 
 if [ $stage -le 26 ]; then
-  $basic_cmd --mem 16G exp/chain/graph/graph_bpe.5000.varikn/log/mkgraph.log utils/mkgraph.sh \
+  $mkgraph_cmd --mem 16G exp/chain/graph/graph_bpe.5000.varikn/log/mkgraph.log utils/mkgraph.sh \
     --self-loop-scale 1.0 \
     data/lang_bpe.5000.varikn/ exp/chain/tree exp/chain/graph/graph_bpe.5000.varikn
 fi
 
 if [ $stage -le 27 ]; then
-  local/chain/decode.sh --datadir data/dev_clean \
-    --acwt 1.0 --post-decode-acwt 10.0 \
-    --decodedir "exp/chain/New-CRDNN-J/2602-2256units/decode_dev_clean_bpe.5000.varikn_acwt1.0"
-  local/chain/decode.sh --datadir data/dev_other/ \
-    --acwt 1.0 --post-decode-acwt 10.0 \
-    --decodedir "exp/chain/New-CRDNN-J/2602-2256units/decode_dev_other_bpe.5000.varikn_acwt1.0"
+  local/chain/decode.sh --datadir data/lp-dev/ \
+    --acwt 1.5 --post-decode-acwt 15.0 \
+    --hparams hyperparams/chain/CRDNN-AA.yaml \
+    --decodedir "exp/chain/CRDNN-AA/2602-2856units/decode_lp-dev_bpe.5000.varikn_acwt1.5"
+  local/chain/decode.sh --datadir data/parl-dev-all/ \
+    --acwt 1.5 --post-decode-acwt 15.0 \
+    --hparams hyperparams/chain/CRDNN-AA.yaml \
+    --decodedir "exp/chain/CRDNN-AA/2602-2856units/decode_parl-dev-all_bpe.5000.varikn_acwt1.5"
 fi
 
-if [ $stage -le 28 ]; then
-  local/chain/run_training.sh \
-    --hparams "hyperparams/chain/New-CRDNN-J-contd.yaml"
-fi
-
-if [ $stage -le 29 ]; then
-  local/chain/decode.sh --datadir data/dev_clean \
-    --hparams "hyperparams/chain/New-CRDNN-J-contd.yaml" \
-    --acwt 1.0 --post-decode-acwt 10.0 \
-    --decodedir "exp/chain/New-CRDNN-J-contd/2602-2256units/decode_dev_clean_bpe.5000.varikn_acwt1.0"
-  local/chain/decode.sh --datadir data/dev_other/ \
-    --hparams "hyperparams/chain/New-CRDNN-J-contd.yaml" \
-    --acwt 1.0 --post-decode-acwt 10.0 \
-    --decodedir "exp/chain/New-CRDNN-J-contd/2602-2256units/decode_dev_other_bpe.5000.varikn_acwt1.0"
-fi

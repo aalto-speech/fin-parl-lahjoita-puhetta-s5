@@ -11,5 +11,5 @@
 # or search for the string 'default_config' in utils/queue.pl or utils/slurm.pl.
 
 export train_cmd="slurm.pl --mem 2G --time 2:0:0"
-export decode_cmd="slurm.pl --mem 4G --time 4:0:0"
-export mkgraph_cmd="slurm.pl --mem 8G --time 1-0:0:0"
+export decode_cmd="slurm.pl --mem 8G --time 4:0:0"
+export mkgraph_cmd="slurm.pl --mem 8G --num_threads 4 --time 16:0:0"
