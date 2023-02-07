@@ -1,26 +1,30 @@
 # ############################################################################
 # Model: E2E ASR with attention-based ASR
-# Training data: All Finnish
+# Training data: FINNISH PARLIAMENT (First release) 30min/spk subset
 # Encoder: CRDNN
-# Decoder: GRU + beamsearch
-# Authors: Aku Rouhe 2022
+# Decoder: GRU + beamsearch + RNNLM
+# Authors: Aku Rouhe 2021 
 # ############################################################################
 
 # Seed needs to be set at top of yaml, before objects with parameters are instantiated
 seed: 2602
 __set_seed: !apply:torch.manual_seed [!ref <seed>]
 
-trainshards: !apply:glob.glob ["./shards/train_all/shard-000*.tar"]
-validshards: !apply:glob.glob ["./shards/dev_2k/shard-000*.tar"]
+trainshards: !apply:glob.glob ["./shards/train_all_sub2/shard-000*.tar"]
+validshards: !apply:glob.glob ["./shards/dev_2k_sub2/shard-000*.tar"]
 # data_folder_rirs: ./augmentation_data # noise/ris dataset will automatically be downloaded here
 num_units: 5000
-output_folder: !ref exp/attention/CRDNN-AA/<seed>-<num_units>units
+output_folder: !ref exp/attention/W2V2-A/<seed>-<num_units>units
 save_folder: !ref <output_folder>/save
 train_log: !ref <output_folder>/train_log.txt
 tokenizer_path: !ref exp/lm/train_varikn.bpe<num_units>.d0.0001/bpe.<num_units>.model
 
 tokenizer: !new:sentencepiece.SentencePieceProcessor
     model_file: !ref <tokenizer_path>
+
+# wav2vec 2.0 
+w2v2_savepath: ./w2v2_checkpoints
+wav2vec2_hub: facebook/wav2vec2-large-uralic-voxpopuli-v2
 
 # The train logger writes training statistics to a file, as well as stdout.
 train_logger: !new:speechbrain.utils.train_logger.FileTrainLogger
@@ -31,48 +35,42 @@ sample_rate: 16000
 n_fft: 400
 n_mels: 40
 
-grad_accumulation_factor: 1
+subsampling: 4
 
 # Training parameters
-number_of_epochs: 60
-number_of_ctc_epochs: 15
+number_of_epochs: 25
+number_of_ctc_epochs: 25
+
+grad_accumulation_factor: 6
+
 train_dynamic_batcher: !name:speechbrain.dataio.iterators.dynamic_bucketed_batch
     max_sample_len: !ref <sample_rate> * 60
     sampler_kwargs:
-        target_batch_numel: !ref <sample_rate> * 80 # 16000*120=2minutes
-        max_batch_numel: !ref <sample_rate> * 124
+        target_batch_numel: !ref <sample_rate> * 160 / <grad_accumulation_factor> # 16000*120=2minutes
+        max_batch_numel: !ref <sample_rate> * 228 / <grad_accumulation_factor>
     len_key: 'wav'
-valid_dynamic_batcher: !name:speechbrain.dataio.iterators.dynamic_bucketed_batch
-    len_key: "wav"
-    sampler_kwargs:
-        target_batch_numel: !ref <sample_rate> * 200
-        max_batch_numel: !ref <sample_rate> * 220
-    max_sample_len: !ref <sample_rate> * 25
-    drop_end: False
+
 train_loader_kwargs:
     num_workers: 4
-    looped_nominal_epoch: 10000
+    looped_nominal_epoch: !ref 10000 * <grad_accumulation_factor> 
+    batch_size: null
+valid_loader_kwargs:
     batch_size: null
 validbatchsize: 4
 ctc_weight: 0.5
-ckpt_interval_minutes: -1 # save checkpoint every N min
+ckpt_interval_minutes: 30 # save checkpoint every N min
 label_smoothing: 0.1
 lr: 0.0001
+lr_wav2vec: 0.0001
+
 
 # Model parameters
 activation: !name:torch.nn.LeakyReLU
+wav2vec_output_dim: 1024
+dnn_neurons: 1024
+freeze_wav2vec: False
 dropout: 0.15
-cnn_blocks: 2
-cnn_channels: (64, 128)
-inter_layer_pooling_size: (2, 2)
-cnn_kernelsize: (3, 3)
-time_pooling_size: 4
-rnn_class: !name:speechbrain.nnet.RNN.LSTM
-rnn_layers: 3
-rnn_neurons: 512
-rnn_bidirectional: True
-dnn_blocks: 1
-dnn_neurons: 512
+
 emb_size: 128
 dec_neurons: 1024
 dec_layers: 1
@@ -85,18 +83,17 @@ bos_index: 1
 eos_index: 2
 
 # Decoding parameters
-test_data_dir: "valid"
 test_data_id: "valid"
 min_decode_ratio: 0.0
 max_decode_ratio: 1.0
 valid_beam_size: 4
-test_beam_size: 8
+test_beam_size: 4
 eos_threshold: 1.3
 using_max_attn_shift: False
 max_attn_shift: 240
-ctc_weight_decode: 0.0
+ctc_weight_decode: 0.5
 coverage_penalty: 3.0 
-temperature: 1.5
+temperature: 2.0
 wer_file: !ref <output_folder>/wer_<test_data_id>_beam<test_beam_size>_cov<coverage_penalty>_eos<eos_threshold>_temp<temperature>_noattnshift.txt
 decode_text_file: !ref <output_folder>/text_<test_data_id>_beam<test_beam_size>_cov<coverage_penalty>_eos<eos_threshold>_temp<temperature>_noattnshift.txt
 
@@ -106,51 +103,28 @@ decode_text_file: !ref <output_folder>/text_<test_data_id>_beam<test_beam_size>_
 epoch_counter: !new:speechbrain.utils.epoch_loop.EpochCounter
     limit: !ref <number_of_epochs>
 
-# Feature extraction
-compute_features: !new:speechbrain.lobes.features.Fbank
-    sample_rate: !ref <sample_rate>
-    n_fft: !ref <n_fft>
-    n_mels: !ref <n_mels>
 
-# Feature normalization (mean and std)
-normalize: !new:speechbrain.processing.features.InputNormalization
-    norm_type: global
+wav2vec2: !new:speechbrain.lobes.models.huggingface_wav2vec.HuggingFaceWav2Vec2
+    source: !ref <wav2vec2_hub>
+    output_norm: True
+    freeze: !ref <freeze_wav2vec>
+    freeze_feature_extractor: True
+    save_path: !ref <w2v2_savepath>
 
-# Added noise and reverb come from OpenRIR dataset, automatically
-# downloaded and prepared with this Environmental Corruption class.
-#env_corrupt: !new:speechbrain.lobes.augment.EnvCorrupt
-#    openrir_folder: !ref <data_folder_rirs>
-#    babble_prob: 0.0
-#    reverb_prob: 0.0
-#    noise_prob: 1.0
-#    noise_snr_low: 0
-#    noise_snr_high: 15
-
-#Adds speech change + time and frequnecy dropouts (time-domain implementation).
-#augmentation: !new:speechbrain.lobes.augment.TimeDomainSpecAugment
-#    sample_rate: !ref <sample_rate>
-#    speeds: [95, 100, 105]
-
-# The CRDNN model is an encoder that combines CNNs, RNNs, and DNNs.
-encoder: !new:speechbrain.lobes.models.CRDNN.CRDNN
-    input_shape: [null, null, !ref <n_mels>]
-    activation: !ref <activation>
-    dropout: !ref <dropout>
-    cnn_blocks: !ref <cnn_blocks>
-    cnn_channels: !ref <cnn_channels>
-    cnn_kernelsize: !ref <cnn_kernelsize>
-    inter_layer_pooling_size: !ref <inter_layer_pooling_size>
-    time_pooling: True
-    using_2d_pooling: False
-    time_pooling_size: !ref <time_pooling_size>
-    rnn_class: !ref <rnn_class>
-    rnn_layers: !ref <rnn_layers>
-    rnn_neurons: !ref <rnn_neurons>
-    rnn_bidirectional: !ref <rnn_bidirectional>
-    rnn_re_init: True
-    dnn_blocks: !ref <dnn_blocks>
-    dnn_neurons: !ref <dnn_neurons>
-    use_rnnp: False
+enc: !new:speechbrain.nnet.containers.Sequential
+    input_shape: [null, null, !ref <wav2vec_output_dim>]
+    linear1: !name:speechbrain.nnet.linear.Linear
+        n_neurons: !ref <dnn_neurons>
+        bias: True
+    bn1: !name:speechbrain.nnet.normalization.BatchNorm1d
+    activation: !new:torch.nn.LeakyReLU
+    drop: !new:torch.nn.Dropout
+        p: !ref <dropout>
+    linear2: !name:speechbrain.nnet.linear.Linear
+        n_neurons: !ref <dnn_neurons>
+        bias: True
+    bn2: !name:speechbrain.nnet.normalization.BatchNorm1d
+    activation2: !new:torch.nn.LeakyReLU
 
 # Embedding (from indexes to an embedding space of dimension emb_size).
 embedding: !new:speechbrain.nnet.embedding.Embedding
@@ -174,7 +148,7 @@ decoder: !new:local_RNN.AttentionalRNNDecoder
 
 # Linear transformation on the top of the encoder.
 ctc_lin: !new:speechbrain.nnet.linear.Linear
-    input_size: !ref <dnn_neurons>
+    input_size: !ref <wav2vec_output_dim>
     n_neurons: !ref <output_neurons>
 
 # Linear transformation on the top of the decoder.
@@ -193,21 +167,16 @@ ctc_cost: !name:speechbrain.nnet.losses.ctc_loss
 # Objects in "modules" dict will have their parameters moved to the correct
 # device, as well as having train()/eval() called on them by the Brain class
 modules:
-    encoder: !ref <encoder>
+    wav2vec2: !ref <wav2vec2>
+    encoder: !ref <enc>
     embedding: !ref <embedding>
     decoder: !ref <decoder>
     ctc_lin: !ref <ctc_lin>
     seq_lin: !ref <seq_lin>
-    normalize: !ref <normalize>
-    #env_corrupt: !ref <env_corrupt>
 
 # Gathering all the submodels in a single model object.
 model: !new:torch.nn.ModuleList
-    - - !ref <encoder>
-      - !ref <embedding>
-      - !ref <decoder>
-      - !ref <ctc_lin>
-      - !ref <seq_lin>
+    - [!ref <embedding>, !ref <ctc_lin>, !ref <seq_lin>, !ref <decoder>, !ref <enc>]
 
 # Beamsearch is applied on the top of the decoder. If the language model is
 # given, a language model is applied (with a weight specified in lm_weight).
@@ -242,6 +211,7 @@ valid_search: !new:speechbrain.decoders.S2SRNNBeamSearcher
     using_max_attn_shift: !ref <using_max_attn_shift>
     max_attn_shift: !ref <max_attn_shift>
     coverage_penalty: !ref <coverage_penalty>
+    ctc_weight: !ref <ctc_weight_decode>
     temperature: !ref <temperature>
 
 # The final decoding on the test set can be more computationally demanding.
@@ -265,11 +235,23 @@ test_search: !new:speechbrain.decoders.S2SRNNBeamSearcher
     ctc_weight: !ref <ctc_weight_decode>
     temperature: !ref <temperature>
 
-lr_annealing: !new:local.NoSchedule
-    lr: !ref <lr>
+lr_annealing_model: !new:speechbrain.nnet.schedulers.NewBobScheduler
+    initial_value: !ref <lr>
+    improvement_threshold: 0.0025
+    annealing_factor: 0.8
+    patient: 0
 
-opt_class: !name:torch.optim.Adam
+lr_annealing_wav2vec: !new:speechbrain.nnet.schedulers.NewBobScheduler
+    initial_value: !ref <lr_wav2vec>
+    improvement_threshold: 0.0025
+    annealing_factor: 0.9
+    patient: 0
+
+model_opt_class: !name:torch.optim.Adam
       lr: !ref <lr> 
+
+wav2vec_opt_class: !name:torch.optim.Adam
+    lr: !ref <lr_wav2vec>
 
 # Functions that compute the statistics to track during the validation step.
 error_rate_computer: !name:speechbrain.utils.metric_stats.ErrorRateStats
@@ -283,6 +265,10 @@ cer_computer: !name:speechbrain.utils.metric_stats.ErrorRateStats
 checkpointer: !new:speechbrain.utils.checkpoints.Checkpointer
     checkpoints_dir: !ref <save_folder>
     recoverables:
+        wav2vec2: !ref <wav2vec2>
         model: !ref <model>
-        normalizer: !ref <normalize>
         counter: !ref <epoch_counter>
+        scheduler_model: !ref <lr_annealing_model>
+        scheduler_wav2vec: !ref <lr_annealing_wav2vec>
+        encoder: !ref <enc>
+

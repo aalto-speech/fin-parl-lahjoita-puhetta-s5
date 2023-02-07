@@ -14,10 +14,12 @@ trainshards: !apply:glob.glob ["./shards/train_all/shard-000*.tar"]
 validshards: !apply:glob.glob ["./shards/dev_2k/shard-000*.tar"]
 # data_folder_rirs: ./augmentation_data # noise/ris dataset will automatically be downloaded here
 num_units: 5000
-output_folder: !ref exp/attention/CRDNN-AA/<seed>-<num_units>units
+output_folder: !ref exp/attention/CRDNN-AA-contd/<seed>-<num_units>units
 save_folder: !ref <output_folder>/save
 train_log: !ref <output_folder>/train_log.txt
 tokenizer_path: !ref exp/lm/train_varikn.bpe<num_units>.d0.0001/bpe.<num_units>.model
+
+pretraining_from: !ref exp/attention/CRDNN-AA/<seed>-<num_units>units/save
 
 tokenizer: !new:sentencepiece.SentencePieceProcessor
     model_file: !ref <tokenizer_path>
@@ -34,8 +36,8 @@ n_mels: 40
 grad_accumulation_factor: 1
 
 # Training parameters
-number_of_epochs: 60
-number_of_ctc_epochs: 15
+number_of_epochs: 40
+number_of_ctc_epochs: -1
 train_dynamic_batcher: !name:speechbrain.dataio.iterators.dynamic_bucketed_batch
     max_sample_len: !ref <sample_rate> * 60
     sampler_kwargs:
@@ -57,7 +59,7 @@ validbatchsize: 4
 ctc_weight: 0.5
 ckpt_interval_minutes: -1 # save checkpoint every N min
 label_smoothing: 0.1
-lr: 0.0001
+lr: 0.00001
 
 # Model parameters
 activation: !name:torch.nn.LeakyReLU
@@ -115,6 +117,7 @@ compute_features: !new:speechbrain.lobes.features.Fbank
 # Feature normalization (mean and std)
 normalize: !new:speechbrain.processing.features.InputNormalization
     norm_type: global
+    update_until_epoch: -1
 
 # Added noise and reverb come from OpenRIR dataset, automatically
 # downloaded and prepared with this Environmental Corruption class.
@@ -265,8 +268,11 @@ test_search: !new:speechbrain.decoders.S2SRNNBeamSearcher
     ctc_weight: !ref <ctc_weight_decode>
     temperature: !ref <temperature>
 
-lr_annealing: !new:local.NoSchedule
-    lr: !ref <lr>
+lr_annealing: !new:speechbrain.nnet.schedulers.NewBobScheduler
+    initial_value: !ref <lr>  
+    improvement_threshold: 0.0025
+    annealing_factor: 0.8
+    patient: 2
 
 opt_class: !name:torch.optim.Adam
       lr: !ref <lr> 
@@ -286,3 +292,16 @@ checkpointer: !new:speechbrain.utils.checkpoints.Checkpointer
         model: !ref <model>
         normalizer: !ref <normalize>
         counter: !ref <epoch_counter>
+        lr_annealing: !ref <lr_annealing>
+
+ckpt_finder: !new:speechbrain.utils.checkpoints.Checkpointer
+    checkpoints_dir: !ref <pretraining_from>
+
+ckpt_finder_kwargs:
+    max_key: unixtime
+
+pretrainer: !new:speechbrain.utils.parameter_transfer.Pretrainer
+    collect_in: !ref <output_folder>/pretraining-files
+    loadables:
+        model: !ref <model>
+        normalizer: !ref <normalize>

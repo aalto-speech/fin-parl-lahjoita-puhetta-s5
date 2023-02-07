@@ -282,3 +282,7 @@ if [ $stage -le 27 ]; then
     --decodedir "exp/chain/CRDNN-AA/2602-2856units/decode_parl-dev-all_bpe.5000.varikn_acwt1.5"
 fi
 
+if [ $stage -le 28 ]; then
+  sbatch local/chain/run_training.sh --hparams hyperparams/chain/CRDNN-AA-contd.yaml
+  exit
+fi

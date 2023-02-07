@@ -18,7 +18,7 @@ num_units=$(tree-info $treedir/tree | grep "num-pdfs" | cut -d" " -f2)
 timesfailed=0
 while ! python $py_script $hparams --num_units $num_units --tmpstorage $LOCAL_SCRATCH; do
   timesfailed=$((timesfailed+1))
-  if [ $timesfailed -le 5 ]; then
+  if [ $timesfailed -le 100 ]; then
     echo "Training crashed, restarting!"
     sleep 3
   else

@@ -15,6 +15,7 @@ import io
 import torchaudio
 sys.path.append("local/")
 import pathlib
+import unicodedata
 
 logger = logging.getLogger(__name__)
 
@@ -197,6 +198,11 @@ class ASR(sb.Brain):
 
         return loss
 
+    def on_fit_start(self):
+        super().on_fit_start()
+        if self.optimizer_step > 0:
+            self.optimizer.param_groups[0]['capturable'] = True
+
     def on_stage_start(self, stage, epoch):
         """Gets called at the beginning of each epoch.
 
@@ -306,10 +312,51 @@ def dataio_prepare(hparams):
         Dictionary containing "train", "valid", and "test" keys mapping to 
         WebDataset datasets dataloaders for them.
     """
+    translation_mapping = {
+      "'": "",
+      "-": "",
+      "à": "a",
+      "æ": "ä",
+      "č": "c",
+      "é": "e",
+      "í": "i",
+      "ñ": "nj",
+      "ó": "o",
+      "ø": "ö",
+      "š": "sh",
+      "ú": "u",
+      "ü": "u",
+      "ý": "y",
+    }
+    translation = str.maketrans(translation_mapping)
 
-    def tokenize(sample):
+    def tokenize(sample, translation=translation):
         text = sample["trn"]
         # quick hack for one sample in text of test2021:
+        text = text.replace("<UNK>", "")
+        text = text.replace("[spn]", "")
+        text = text.replace("[spk]", "")
+        text = text.replace("[int]", "")
+        text = text.replace("[fil]", "")
+        text = text.replace(".fp", "")
+        text = text.replace(".br", "")
+        text = text.replace(".cough", "")
+        text = text.replace(".ct", "")
+        text = text.replace(".laugh", "")
+        text = text.replace(".sigh", "")
+        text = text.replace(".yawn", "")
+
+        # Canonical forms of letters, see e.g. the Python docs
+        # https://docs.python.org/3.7/library/unicodedata.html#unicodedata.normalize
+        text = unicodedata.normalize("NFKC", text)
+        # Just decide that everything will be uppercase:
+        text = text.lower()
+        # All whitespace to one space:
+        text = " ".join(text.strip().split())
+        # Translate weird chars:
+        text = text.translate(translation)
+        # Remove all extra characters:
+        text = "".join(char for char in text if char.isalpha() or char == " " )
         text = text.replace(" <NOISE>", "")
         fulltokens = torch.LongTensor(
                 [hparams["bos_index"]] + hparams["tokenizer"].encode(text) + [hparams["eos_index"]]
@@ -325,21 +372,18 @@ def dataio_prepare(hparams):
             .rename(trn="transcript.txt", wav="audio.pth")
             .map(tokenize)
             .repeat()
-            .then(
-                sb.dataio.iterators.dynamic_bucketed_batch,
-                **hparams["dynamic_batch_kwargs"]
+            .compose(
+                hparams["train_dynamic_batcher"]
             )
     )
-    if "valid_dynamic_batch_kwargs" in hparams:
+    if "valid_dynamic_batcher" in hparams:
         validdata = (
                 wds.WebDataset(hparams["validshards"])
                 .decode()
                 .rename(trn="transcript.txt", wav="audio.pth")
                 .map(tokenize)
-                .then(
-                    sb.dataio.iterators.dynamic_bucketed_batch,
-                    drop_end=False,
-                    **hparams["valid_dynamic_batch_kwargs"]
+                .compose(
+                    hparams["valid_dynamic_batcher"],
                 )
         )
     else:

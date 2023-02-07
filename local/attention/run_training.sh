@@ -15,7 +15,7 @@ py_script="local/attention/sb_train_attn.py"
 timesfailed=0
 while ! python $py_script $hparams; do
   timesfailed=$((timesfailed+1))
-  if [ $timesfailed -le 5 ]; then
+  if [ $timesfailed -le 105 ]; then
     echo "Training crashed, restarting!"
     sleep 3
   else

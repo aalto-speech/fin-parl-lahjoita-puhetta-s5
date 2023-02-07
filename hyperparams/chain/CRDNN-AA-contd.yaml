@@ -1,5 +1,5 @@
 # ############################################################################
-# Model: E2E ASR with attention-based ASR
+# Model: ASR with attention-based ASR
 # Training data: FINNISH PARLIAMENT (First release) 30min/spk subset
 # Encoder: CRDNN
 # Decoder: GRU + beamsearch + RNNLM
@@ -10,35 +10,32 @@
 seed: 2602
 __set_seed: !apply:torch.manual_seed [!ref <seed>]
 
-trainshards: !apply:glob.glob ["./shards/train_all_sub2/shard-000*.tar"]
-validshards: !apply:glob.glob ["./shards/dev_2k_sub2/shard-000*.tar"]
+trainshards: !apply:glob.glob ["./shards/train_all/shard-000*.tar"]
+validshards: !apply:glob.glob ["./shards/dev_2k/shard-000*.tar"]
 # data_folder_rirs: ./augmentation_data # noise/ris dataset will automatically be downloaded here
 num_units: !PLACEHOLDER
-output_folder: !ref exp/chain/W2V2-A/<seed>-<num_units>units
+output_folder: !ref exp/chain/CRDNN-AA-contd/<seed>-<num_units>units
 save_folder: !ref <output_folder>/save
 train_log: !ref <output_folder>/train_log.txt
 
-# wav2vec 2.0 
-w2v2_savepath: ./w2v2_checkpoints
-wav2vec2_hub: facebook/wav2vec2-large-uralic-voxpopuli-v2
+pretraining_from: !ref exp/chain/CRDNN-AA/<seed>-<num_units>units/save
 
-tmpstorage: !PLACEHOLDER
+tmpstorage: /tmp
 # FST stuff:
-expname: "all-finnish-sub2"
-numfstdir: exp/chain/graph2/train_all/
+expname: "all-finnish"
+numfstdir: exp/chain/graph/train_all/
 numfsttmpdir: !ref <tmpstorage>/sb-train-fsts-<expname>
-valid_numfstdir: exp/chain/graph2/dev_2k/
+valid_numfstdir: exp/chain/graph/dev_2k/
 valid_numfsttmpdir: !ref <tmpstorage>/sb-valid-fsts-<expname>
 denominator_graph: !new:pychain.graph.ChainGraph
     fst: !apply:simplefst.StdVectorFst.read
-        - exp/chain/graph2/den.fst
+        - exp/chain/graph/den.fst
     initial_mode: leaky
     final_mode: ones 
 
 chain_loss: !new:pychain.loss.ChainLoss
     - !ref <denominator_graph>
     - 0.0001
-train_fsts_in_mem: True
 # FST Helpers:
 transgetter: !new:operator.attrgetter
     - "num_transitions"
@@ -54,7 +51,7 @@ outnorm_scale: 0.0005
 prior_file: !ref <output_folder>/prior.pth
 #test_max_key: "unixtime"
 test_min_key: "loss"
-testdir: kaldi-s5/data/parl-dev-all-fixed_hires/
+testdir: data/test_clean
 test_probs_out: !ref <output_folder>/test_probs.ark
 subtract_prior: True
 normalize_out: False
@@ -64,22 +61,21 @@ train_logger: !new:speechbrain.utils.train_logger.FileTrainLogger
     save_file: !ref <train_log>
 
 # Training parameters
-number_of_epochs: 25
+number_of_epochs: 40
 nonfinite_patience: 100
 
 # Feature parameters
 sample_rate: 16000
 n_fft: 400
 n_mels: 80
-subsampling: 2
+subsampling: 3
 
-grad_accumulation_factor: 6
-
+dynamic_batch_kwargs:
 train_dynamic_batcher: !name:speechbrain.dataio.iterators.dynamic_bucketed_batch
     max_sample_len: !ref <sample_rate> * 60
     sampler_kwargs:
-        target_batch_numel: !ref <sample_rate> * 160 / <grad_accumulation_factor> # 16000*120=2minutes
-        max_batch_numel: !ref <sample_rate> * 228 / <grad_accumulation_factor>
+        target_batch_numel: !ref <sample_rate> * 80 # 16000*120=2minutes
+        max_batch_numel: !ref <sample_rate> * 124
     len_key: 'wav'
 valid_dynamic_batcher: !name:speechbrain.dataio.iterators.dynamic_bucketed_batch
     len_key: "wav"
@@ -91,7 +87,7 @@ valid_dynamic_batcher: !name:speechbrain.dataio.iterators.dynamic_bucketed_batch
 
 train_loader_kwargs:
     num_workers: 4
-    looped_nominal_epoch: !ref 10000 * <grad_accumulation_factor> 
+    looped_nominal_epoch: 10000
     batch_size: null
 prior_loader_kwargs:
     num_workers: 0
@@ -99,16 +95,23 @@ prior_loader_kwargs:
     batch_size: null
 ckpt_interval_minutes: 30 # save checkpoint every N min
 label_smoothing: 0.1
-lr: 0.0001
-lr_wav2vec: 0.0001
-
+lr: 0.00001
 
 # Model parameters
 activation: !name:torch.nn.LeakyReLU
-wav2vec_output_dim: 1024
-dnn_neurons: 1024
-freeze_wav2vec: False
 dropout: 0.15
+cnn_blocks: 2
+cnn_channels: (64, 128)
+inter_layer_pooling_size: (2, 2)
+cnn_kernelsize: (3, 3)
+time_pooling_size: 3
+rnn_class: !name:speechbrain.nnet.RNN.LSTM
+rnn_layers: 3
+rnn_neurons: 512
+rnn_bidirectional: True
+dnn_blocks: 1
+dnn_neurons: 512
+output_neurons: !ref <num_units>  #Number of tokens (same as LM)
 
 # The first object passed to the Brain class is this "Epoch Counter"
 # which is saved by the Checkpointer so that training can be resumed
@@ -116,28 +119,36 @@ dropout: 0.15
 epoch_counter: !new:speechbrain.utils.epoch_loop.EpochCounter
     limit: !ref <number_of_epochs>
 
+# Feature extraction
+compute_features: !new:speechbrain.lobes.features.Fbank
+    sample_rate: !ref <sample_rate>
+    n_fft: !ref <n_fft>
+    n_mels: !ref <n_mels>
 
-wav2vec2: !new:speechbrain.lobes.models.huggingface_wav2vec.HuggingFaceWav2Vec2
-    source: !ref <wav2vec2_hub>
-    output_norm: True
-    freeze: !ref <freeze_wav2vec>
-    freeze_feature_extractor: True
-    save_path: !ref <w2v2_savepath>
+# Feature normalization (mean and std)
+normalize: !new:speechbrain.processing.features.InputNormalization
+    norm_type: global
 
-enc: !new:speechbrain.nnet.containers.Sequential
-    input_shape: [null, null, !ref <wav2vec_output_dim>]
-    linear1: !name:speechbrain.nnet.linear.Linear
-        n_neurons: !ref <dnn_neurons>
-        bias: True
-    bn1: !name:speechbrain.nnet.normalization.BatchNorm1d
-    activation: !new:torch.nn.LeakyReLU
-    drop: !new:torch.nn.Dropout
-        p: !ref <dropout>
-    linear2: !name:speechbrain.nnet.linear.Linear
-        n_neurons: !ref <dnn_neurons>
-        bias: True
-    bn2: !name:speechbrain.nnet.normalization.BatchNorm1d
-    activation2: !new:torch.nn.LeakyReLU
+# The CRDNN model is an encoder that combines CNNs, RNNs, and DNNs.
+encoder: !new:speechbrain.lobes.models.CRDNN.CRDNN
+    input_shape: [null, null, !ref <n_mels>]
+    activation: !ref <activation>
+    dropout: !ref <dropout>
+    cnn_blocks: !ref <cnn_blocks>
+    cnn_channels: !ref <cnn_channels>
+    cnn_kernelsize: !ref <cnn_kernelsize>
+    inter_layer_pooling_size: !ref <inter_layer_pooling_size>
+    time_pooling: True
+    using_2d_pooling: False
+    time_pooling_size: !ref <time_pooling_size>
+    rnn_class: !ref <rnn_class>
+    rnn_layers: !ref <rnn_layers>
+    rnn_neurons: !ref <rnn_neurons>
+    rnn_bidirectional: !ref <rnn_bidirectional>
+    rnn_re_init: True
+    dnn_blocks: !ref <dnn_blocks>
+    dnn_neurons: !ref <dnn_neurons>
+    use_rnnp: False
 
 # Linear transformations on the top of the decoder.
 xent_lin_out: !new:speechbrain.nnet.linear.Linear
@@ -151,38 +162,22 @@ lfmmi_lin_out: !new:speechbrain.nnet.linear.Linear
 log_softmax: !new:speechbrain.nnet.activations.Softmax
     apply_log: True
 
-
 # Objects in "modules" dict will have their parameters moved to the correct
 # device, as well as having train()/eval() called on them by the Brain class
 modules:
-    wav2vec2: !ref <wav2vec2>
-    encoder: !ref <enc>
+    encoder: !ref <encoder>
     xent_lin_out: !ref <xent_lin_out>
     lfmmi_lin_out: !ref <lfmmi_lin_out>
+    normalize: !ref <normalize>
 
-# Gathering all the submodels in a single model object.
-model: !new:torch.nn.ModuleList
-    - - !ref <xent_lin_out>
-      - !ref <lfmmi_lin_out>
-      - !ref <enc>
-
-lr_annealing_model: !new:speechbrain.nnet.schedulers.NewBobScheduler
-    initial_value: !ref <lr>
+lr_annealing: !new:speechbrain.nnet.schedulers.NewBobScheduler
+    initial_value: !ref <lr>  
     improvement_threshold: 0.0025
     annealing_factor: 0.8
-    patient: 0
+    patient: 2
 
-lr_annealing_wav2vec: !new:speechbrain.nnet.schedulers.NewBobScheduler
-    initial_value: !ref <lr_wav2vec>
-    improvement_threshold: 0.0025
-    annealing_factor: 0.9
-    patient: 0
-
-model_opt_class: !name:torch.optim.Adam
+opt_class: !name:torch.optim.Adam
       lr: !ref <lr> 
-
-wav2vec_opt_class: !name:torch.optim.Adam
-    lr: !ref <lr_wav2vec>
 
 # Functions that compute the statistics to track during the validation step.
 accuracy_computer: !name:speechbrain.utils.Accuracy.AccuracyStats
@@ -193,8 +188,23 @@ accuracy_computer: !name:speechbrain.utils.Accuracy.AccuracyStats
 checkpointer: !new:speechbrain.utils.checkpoints.Checkpointer
     checkpoints_dir: !ref <save_folder>
     recoverables:
-        wav2vec2: !ref <wav2vec2>
-        model: !ref <model>
+        encoder: !ref <encoder>
+        xent_lin_out: !ref <xent_lin_out>
+        lfmmi_lin_out: !ref <lfmmi_lin_out>
+        normalizer: !ref <normalize>
         counter: !ref <epoch_counter>
-        scheduler_model: !ref <lr_annealing_model>
-        scheduler_wav2vec: !ref <lr_annealing_wav2vec>
+        lr_annealing: !ref <lr_annealing>
+
+ckpt_finder: !new:speechbrain.utils.checkpoints.Checkpointer
+    checkpoints_dir: !ref <pretraining_from>
+
+ckpt_finder_kwargs:
+    max_key: unixtime
+
+pretrainer: !new:speechbrain.utils.parameter_transfer.Pretrainer
+    collect_in: !ref <output_folder>/pretraining_files
+    loadables:
+        encoder: !ref <encoder>
+        xent_lin_out: !ref <xent_lin_out>
+        lfmmi_lin_out: !ref <lfmmi_lin_out>
+        normalizer: !ref <normalize> 

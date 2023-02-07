@@ -155,6 +155,11 @@ class LFMMIAM(sb.Brain):
         if self.checkpointer is not None:
             self.checkpointer.add_recoverable("modelopt", self.model_optimizer)
 
+    def on_fit_start(self):
+        super().on_fit_start()
+        self.model_optimizer.param_groups[0]['capturable'] = True
+        self.wav2vec_optimizer.param_groups[0]['capturable'] = True
+
     def fit_batch(self, batch):
         """Train the parameters given a single batch in input"""
         should_step = self.step % self.hparams.grad_accumulation_factor == 0
