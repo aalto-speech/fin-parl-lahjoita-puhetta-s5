@@ -78,6 +78,8 @@ if [ $stage -le 4 ]; then
     data/dev_all data/lp-dev data/parl-dev-seen/ data/parl-dev-unseen/
   utils/combine_data.sh \
     data/parl-dev-all data/parl-dev-seen/ data/parl-dev-unseen/  
+  utils/combine_data.sh \
+    data/parl-test-all data/parl-test-seen/ data/parl-test-unseen/  
   # Create a smaller, more manageable size dev set:
   utils/subset_data_dir.sh data/dev_all 2000 data/dev_2k
 fi
@@ -285,4 +287,163 @@ fi
 if [ $stage -le 28 ]; then
   sbatch local/chain/run_training.sh --hparams hyperparams/chain/CRDNN-AA-contd.yaml
   exit
+fi
+
+if [ $stage -le 29 ]; then
+  local/chain/decode.sh --datadir data/lp-dev/ \
+    --acwt 1.5 --post-decode-acwt 15.0 \
+    --hparams hyperparams/chain/CRDNN-AA-contd.yaml \
+    --decodedir "exp/chain/CRDNN-AA-contd//2602-2856units/decode_lp-dev_bpe.5000.varikn_acwt1.5"
+  local/chain/decode.sh --datadir data/parl-dev-all/ \
+    --acwt 1.5 --post-decode-acwt 15.0 \
+    --hparams hyperparams/chain/CRDNN-AA-contd.yaml \
+    --decodedir "exp/chain/CRDNN-AA-contd//2602-2856units/decode_parl-dev-all_bpe.5000.varikn_acwt1.5"
+fi
+
+if [ $stage -le 30 ]; then
+  # Train Subset LMs:
+  local/train_lm.sh \
+    --varikn_cmd "slurm.pl --mem 24G --time 2:0:0" \
+    --BPE_units 5000 \
+    --stage 0 \
+    --traindata data/parl-2008-2020-train/ \
+    --validdata data/parl-dev-all \
+    train_parl data/lang_parl_bpe.5000.varikn
+  local/train_lm.sh \
+    --varikn_cmd "slurm.pl --mem 24G --time 2:0:0" \
+    --BPE_units 5000 \
+    --stage 0 \
+    --traindata data/lp-train-all \
+    --validdata data/lp-dev \
+    train_lp data/lang_lp_bpe.5000.varikn
+fi
+
+if [ $stage -le 31 ]; then
+  local/chain/decode.sh --datadir data/dev_all/ \
+    --acwt 1.5 --post-decode-acwt 15.0 \
+    --hparams hyperparams/chain/CRDNN-AA-contd.yaml \
+    --decodedir "exp/chain/CRDNN-AA-contd//2602-2856units/decode_dev_all_bpe.5000.varikn_acwt1.5"
+fi
+
+if [ $stage -le 32 ]; then
+  $mkgraph_cmd --mem 16G exp/chain/graph/graph_parl_bpe.5000.varikn/log/mkgraph.log utils/mkgraph.sh \
+    --self-loop-scale 1.0 \
+    data/lang_parl_bpe.5000.varikn/ exp/chain/tree exp/chain/graph/graph_parl_bpe.5000.varikn
+  $mkgraph_cmd --mem 16G exp/chain/graph/graph_lp_bpe.5000.varikn/log/mkgraph.log utils/mkgraph.sh \
+    --self-loop-scale 1.0 \
+    data/lang_lp_bpe.5000.varikn/ exp/chain/tree exp/chain/graph/graph_lp_bpe.5000.varikn
+fi
+
+if [ $stage -le 33 ]; then
+  local/chain/decode.sh --datadir data/parl-test-2020/ \
+    --acwt 1.5 --post-decode-acwt 15.0 \
+    --hparams hyperparams/chain/CRDNN-AA-contd.yaml \
+    --graphdir exp/chain/graph/graph_bpe.5000.varikn \
+   --decodedir "exp/chain/CRDNN-AA-contd//2602-2856units/decode_parl-test-2020_bpe.5000.varikn_acwt1.5"
+  local/chain/decode.sh --datadir data/parl-test-all/ \
+    --acwt 1.5 --post-decode-acwt 15.0 \
+    --hparams hyperparams/chain/CRDNN-AA-contd.yaml \
+    --graphdir exp/chain/graph/graph_bpe.5000.varikn/ \
+    --decodedir "exp/chain/CRDNN-AA-contd//2602-2856units/decode_parl-test-all_bpe.5000.varikn_acwt1.5"
+  local/chain/decode.sh --datadir data/lp-test/ \
+    --acwt 1.5 --post-decode-acwt 15.0 \
+    --hparams hyperparams/chain/CRDNN-AA-contd.yaml \
+    --graphdir exp/chain/graph/graph_bpe.5000.varikn \
+    --decodedir "exp/chain/CRDNN-AA-contd//2602-2856units/decode_lp-test_bpe.5000.varikn_acwt1.5"
+fi
+
+if [ $stage -le 34 ]; then
+  local/chain/decode.sh --datadir data/parl-dev-all/ \
+    --acwt 1.5 --post-decode-acwt 15.0 \
+    --stage 2 --posteriors_from exp/chain/CRDNN-AA-contd//2602-2856units/decode_parl-dev-all_bpe.5000.varikn_acwt1.5/ \
+    --hparams hyperparams/chain/CRDNN-AA-contd.yaml \
+    --graphdir exp/chain/graph/graph_parl_bpe.5000.varikn \
+    --decodedir "exp/chain/CRDNN-AA-contd//2602-2856units/decode_parl-dev-all_parl_bpe.5000.varikn_acwt1.5"
+  local/chain/decode.sh --datadir data/lp-dev/ \
+    --acwt 1.5 --post-decode-acwt 15.0 \
+    --stage 2 --posteriors_from exp/chain/CRDNN-AA-contd//2602-2856units/decode_lp-dev_bpe.5000.varikn_acwt1.5/ \
+    --hparams hyperparams/chain/CRDNN-AA-contd.yaml \
+    --graphdir exp/chain/graph/graph_parl_bpe.5000.varikn \
+    --decodedir "exp/chain/CRDNN-AA-contd//2602-2856units/decode_lp-dev_parl_bpe.5000.varikn_acwt1.5"
+
+  local/chain/decode.sh --datadir data/parl-dev-all/ \
+    --acwt 1.5 --post-decode-acwt 15.0 \
+    --stage 2 --posteriors_from exp/chain/CRDNN-AA-contd//2602-2856units/decode_parl-dev-all_bpe.5000.varikn_acwt1.5/ \
+    --hparams hyperparams/chain/CRDNN-AA-contd.yaml \
+    --graphdir exp/chain/graph/graph_lp_bpe.5000.varikn \
+    --decodedir "exp/chain/CRDNN-AA-contd//2602-2856units/decode_parl-dev-all_lp_bpe.5000.varikn_acwt1.5"
+  local/chain/decode.sh --datadir data/lp-dev/ \
+    --acwt 1.5 --post-decode-acwt 15.0 \
+    --stage 2 --posteriors_from exp/chain/CRDNN-AA-contd//2602-2856units/decode_lp-dev_bpe.5000.varikn_acwt1.5/ \
+    --hparams hyperparams/chain/CRDNN-AA-contd.yaml \
+    --graphdir exp/chain/graph/graph_lp_bpe.5000.varikn \
+    --decodedir "exp/chain/CRDNN-AA-contd//2602-2856units/decode_lp-dev_lp_bpe.5000.varikn_acwt1.5"
+fi
+
+if [ $stage -le 35 ]; then
+  local/chain/decode.sh --datadir data/parl-test-2020/ \
+    --acwt 1.5 --post-decode-acwt 15.0 \
+    --stage 2 --posteriors_from exp/chain/CRDNN-AA-contd//2602-2856units/decode_parl-test-2020_bpe.5000.varikn_acwt1.5/ \
+    --hparams hyperparams/chain/CRDNN-AA-contd.yaml \
+    --graphdir exp/chain/graph/graph_parl_bpe.5000.varikn \
+    --decodedir "exp/chain/CRDNN-AA-contd//2602-2856units/decode_parl-test-2020_parl_bpe.5000.varikn_acwt1.5"
+  local/chain/decode.sh --datadir data/parl-test-all/ \
+    --acwt 1.5 --post-decode-acwt 15.0 \
+    --stage 2 --posteriors_from exp/chain/CRDNN-AA-contd//2602-2856units/decode_parl-test-all_bpe.5000.varikn_acwt1.5/ \
+    --hparams hyperparams/chain/CRDNN-AA-contd.yaml \
+    --graphdir exp/chain/graph/graph_parl_bpe.5000.varikn \
+    --decodedir "exp/chain/CRDNN-AA-contd//2602-2856units/decode_parl-test-all_parl_bpe.5000.varikn_acwt1.5"
+  local/chain/decode.sh --datadir data/lp-test/ \
+    --acwt 1.5 --post-decode-acwt 15.0 \
+    --stage 2 --posteriors_from exp/chain/CRDNN-AA-contd//2602-2856units/decode_lp-test_bpe.5000.varikn_acwt1.5/ \
+    --hparams hyperparams/chain/CRDNN-AA-contd.yaml \
+    --graphdir exp/chain/graph/graph_parl_bpe.5000.varikn \
+    --decodedir "exp/chain/CRDNN-AA-contd//2602-2856units/decode_lp-test_parl_bpe.5000.varikn_acwt1.5"
+
+  local/chain/decode.sh --datadir data/parl-test-2020/ \
+    --acwt 1.5 --post-decode-acwt 15.0 \
+    --stage 2 --posteriors_from exp/chain/CRDNN-AA-contd//2602-2856units/decode_parl-test-2020_bpe.5000.varikn_acwt1.5/ \
+    --hparams hyperparams/chain/CRDNN-AA-contd.yaml \
+    --graphdir exp/chain/graph/graph_lp_bpe.5000.varikn \
+    --decodedir "exp/chain/CRDNN-AA-contd//2602-2856units/decode_parl-test-2020_lp_bpe.5000.varikn_acwt1.5"
+  local/chain/decode.sh --datadir data/parl-test-all/ \
+    --acwt 1.5 --post-decode-acwt 15.0 \
+    --stage 2 --posteriors_from exp/chain/CRDNN-AA-contd//2602-2856units/decode_parl-test-all_bpe.5000.varikn_acwt1.5/ \
+    --hparams hyperparams/chain/CRDNN-AA-contd.yaml \
+    --graphdir exp/chain/graph/graph_lp_bpe.5000.varikn \
+    --decodedir "exp/chain/CRDNN-AA-contd//2602-2856units/decode_parl-test-all_lp_bpe.5000.varikn_acwt1.5"
+  local/chain/decode.sh --datadir data/lp-test/ \
+    --acwt 1.5 --post-decode-acwt 15.0 \
+    --stage 2 --posteriors_from exp/chain/CRDNN-AA-contd//2602-2856units/decode_lp-test_bpe.5000.varikn_acwt1.5/ \
+    --hparams hyperparams/chain/CRDNN-AA-contd.yaml \
+    --graphdir exp/chain/graph/graph_lp_bpe.5000.varikn \
+    --decodedir "exp/chain/CRDNN-AA-contd//2602-2856units/decode_lp-test_lp_bpe.5000.varikn_acwt1.5"
+fi
+
+# MFCCs are not needed
+# We downloaded YLE Test New from our group's archive;
+# but it is not available publicly unfortunately
+#if [ $stage -le 36 ]; then
+#  steps/make_mfcc.sh --cmd "$train_cmd --time 4:0:0" --nj 8 data/yle-test-new exp/make_mfcc/yle-test-new $mfccdir
+#  steps/compute_cmvn_stats.sh data/yle-test-new
+#fi
+
+if [ $stage -le 37 ]; then
+  local/chain/decode.sh --datadir data/yle-test-new \
+    --acwt 1.5 --post-decode-acwt 15.0 \
+    --hparams hyperparams/chain/CRDNN-AA-contd.yaml \
+    --graphdir exp/chain/graph/graph_bpe.5000.varikn \
+    --decodedir "exp/chain/CRDNN-AA-contd//2602-2856units/decode_yle-test-new_bpe.5000.varikn_acwt1.5"
+  local/chain/decode.sh --datadir data/yle-test-new \
+    --stage 2 --posteriors_from "exp/chain/CRDNN-AA-contd//2602-2856units/decode_yle-test-new_bpe.5000.varikn_acwt1.5" \
+    --acwt 1.5 --post-decode-acwt 15.0 \
+    --hparams hyperparams/chain/CRDNN-AA-contd.yaml \
+    --graphdir exp/chain/graph/graph_parl_bpe.5000.varikn \
+    --decodedir "exp/chain/CRDNN-AA-contd/2602-2856units/decode_yle-test-new_parl_bpe.5000.varikn_acwt1.5"
+  local/chain/decode.sh --datadir data/yle-test-new \
+    --stage 2 --posteriors_from "exp/chain/CRDNN-AA-contd//2602-2856units/decode_yle-test-new_bpe.5000.varikn_acwt1.5" \
+    --acwt 1.5 --post-decode-acwt 15.0 \
+    --hparams hyperparams/chain/CRDNN-AA-contd.yaml \
+    --graphdir exp/chain/graph/graph_lp_bpe.5000.varikn \
+    --decodedir "exp/chain/CRDNN-AA-contd/2602-2856units/decode_yle-test-new_lp_bpe.5000.varikn_acwt1.5"
 fi

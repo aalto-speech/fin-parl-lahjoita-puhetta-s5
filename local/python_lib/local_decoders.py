@@ -587,6 +587,8 @@ class S2SBeamSearcher(S2SBaseSearcher):
 
         min_decode_steps = int(enc_states.shape[1] * self.min_decode_ratio)
         max_decode_steps = int(enc_states.shape[1] * self.max_decode_ratio)
+        if max_decode_steps == 0:
+            max_decode_steps = 1
 
         # Initialize the previous attention peak to zero
         # This variable will be used when using_max_attn_shift=True

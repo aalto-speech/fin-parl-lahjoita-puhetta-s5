@@ -40,7 +40,8 @@ dirin=$dataroot/dev-test/2016-test/seen
 outdir="data/parl-test-seen"
 mkdir -p $outdir
 while read fullwavpath; do
-  uttid=$(basename $fullwavpath .wav)
+  # Note: fix one name that can cause some annoying effects
+  uttid=$(basename $fullwavpath .wav | sed "s/saara_sofia_sirén/saara_sofia_siren/g")
   spkid=${uttid%_*}
 
   fulltrnpath=${fullwavpath%.wav}.trn

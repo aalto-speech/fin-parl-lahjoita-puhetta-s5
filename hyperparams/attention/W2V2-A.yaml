@@ -83,6 +83,7 @@ bos_index: 1
 eos_index: 2
 
 # Decoding parameters
+test_data_dir: "valid"
 test_data_id: "valid"
 min_decode_ratio: 0.0
 max_decode_ratio: 1.0

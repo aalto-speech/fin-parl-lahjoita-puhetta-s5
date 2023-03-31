@@ -60,3 +60,12 @@ if [ $stage -le 25 ]; then
   exit 
 fi
 
+if [ $stage -le 26 ]; then
+  local/chain/decode.sh --datadir data/dev_all/ \
+    --nj 24 \
+    --py_script local/chain/sb-test-w2v2-mtl-avg.py \
+    --tree exp/chain/tree2 \
+    --acwt 1.5 --post-decode-acwt 15.0 \
+    --hparams "hyperparams/chain/W2V2-A.yaml --tmpstorage ./tmp/" \
+    --decodedir "exp/chain/W2V2-A/2602-3096units/decode_dev_all_bpe.5000.varikn_acwt1.5"
+fi

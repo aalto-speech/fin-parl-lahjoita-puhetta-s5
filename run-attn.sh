@@ -25,3 +25,21 @@ if [ $stage -le 2 ]; then
   exit
 fi
 
+if [ $stage -le 3 ]; then
+  sbatch local/attention/run_training.sh --py_script local/attention/sb_train_attn_mwer.py --hparams hyperparams/attention/mwer/CRDNN-AA-contd.yaml
+  echo "Submitted training job, exiting"
+  exit
+fi
+
+if [ $stage -le 4 ]; then
+  local/attention/run_test.sh --hparams hyperparams/attention/CRDNN-AA-contd.yaml --datadir data/lp-dev
+  local/attention/run_test.sh --hparams hyperparams/attention/CRDNN-AA-contd.yaml --datadir data/parl-dev-all
+  local/attention/run_test.sh --hparams hyperparams/attention/CRDNN-AA-contd.yaml --datadir data/parl-test-all
+  local/attention/run_test.sh --hparams hyperparams/attention/CRDNN-AA-contd.yaml --datadir data/parl-test-2020
+  local/attention/run_test.sh --hparams hyperparams/attention/CRDNN-AA-contd.yaml --datadir data/lp-test
+fi
+
+if [ $stage -le 5 ]; then
+  # Note: this data set is not available publicly.
+  local/attention/run_test.sh --hparams hyperparams/attention/CRDNN-AA-contd.yaml --datadir data/yle-test-new
+fi

@@ -39,14 +39,14 @@ if [ $stage -le 1 ]; then
     --test_probs_out "$posteriors_prefix".from_sb
   # Make SCPs:
   copy-matrix ark:"$posteriors_prefix".from_sb ark,scp:"$posteriors_prefix".ark,"$posteriors_prefix".scp
-  utils/split_scp.pl "$posteriors_prefix".scp $(for n in `seq $nj`; do echo "$posteriors_prefix"."$n".scp; done)
 fi
 
 # Lattice generation
 if [ $stage -le 2 ]; then 
-  if [ -d $posteriors_from ]; then
-    ln -s -f "$PWD"/"$posteriors_from"/logprobs* "$decodedir"/
+  if [ ! -z $posteriors_from ]; then
+    ln -s -f "$PWD"/"$posteriors_from"/logprobs.scp "$decodedir"/
   fi
+  utils/split_scp.pl "$posteriors_prefix".scp $(for n in `seq $nj`; do echo "$posteriors_prefix"."$n".scp; done)
   $decode_cmd JOB=1:$nj "$decodedir"/log/decode.JOB.log \
     latgen-faster-mapped \
     --acoustic-scale=$acwt \
@@ -60,22 +60,24 @@ if [ $stage -le 2 ]; then
   echo "$nj" > "$decodedir"/num_jobs
 fi
 
-if [[ $stage -le 3 && skip_scoring != "true" ]]; then
-  #HACK THIS:
-  if [[ "$graphdir" == *"varikn"* ]]; then
-    local/score.sh \
-      --cmd "$score_cmd" \
-      --beam $lattice_beam \
-      "$datadir" \
-      "$graphdir" \
-      "$decodedir"
-  else
-    local/score.sh \
-      --cmd "$score_cmd" \
-      --beam $lattice_beam \
-      --hyp_filtering_cmd "cat" \
-      "$datadir" \
-      "$graphdir" \
-      "$decodedir"
+if [ $stage -le 3 ]; then
+  if ! $skip_scoring ; then
+    #HACK THIS:
+    if [[ "$graphdir" == *"varikn"* ]]; then
+      local/score.sh \
+        --cmd "$score_cmd" \
+        --beam $lattice_beam \
+        "$datadir" \
+        "$graphdir" \
+        "$decodedir"
+    else
+      local/score.sh \
+        --cmd "$score_cmd" \
+        --beam $lattice_beam \
+        --hyp_filtering_cmd "cat" \
+        "$datadir" \
+        "$graphdir" \
+        "$decodedir"
+    fi
   fi
 fi

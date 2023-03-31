@@ -19,3 +19,8 @@ if [ $stage -le 1 ]; then
   exit
 fi
 
+if [ $stage -le 3 ]; then
+  sbatch local/attention/run_training.sh --py_script local/attention/sb_train_attn_mwer_w2v2.py --hparams hyperparams/attention/mwer/W2V2-a.yaml
+  echo "Submitted training job, exiting"
+  exit
+fi
