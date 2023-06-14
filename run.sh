@@ -99,6 +99,8 @@ if [ $stage -le 5 ]; then
   done
 fi
 
+exit
+
 if [ $stage -le 6 ]; then
   local/prepare_lexicon.sh \
     --extra_texts "data/lp-dev/text data/parl-dev-seen/text data/parl-dev-unseen/text" \
