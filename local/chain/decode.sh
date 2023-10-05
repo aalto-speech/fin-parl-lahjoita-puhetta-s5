@@ -12,6 +12,7 @@ tree="exp/chain/tree/"
 graphdir="exp/chain/graph/graph_bpe.5000.varikn"
 py_script="local/chain/sb-test-mtl-avg.py"
 posteriors_from=
+score_opts=
 skip_scoring=false
 
 # Decoding params:
@@ -65,6 +66,7 @@ if [ $stage -le 3 ]; then
     #HACK THIS:
     if [[ "$graphdir" == *"varikn"* ]]; then
       local/score.sh \
+        $score_opts \
         --cmd "$score_cmd" \
         --beam $lattice_beam \
         "$datadir" \

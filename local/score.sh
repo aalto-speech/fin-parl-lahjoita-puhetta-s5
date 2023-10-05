@@ -16,7 +16,7 @@ word_ins_penalty=0.0,0.5,1.0
 min_lmwt=7
 max_lmwt=17
 iter=final
-ref_filtering_cmd="cat"
+ref_filtering_cmd="local/wer_ref_filter"
 hyp_filtering_cmd="local/wer_hyp_filter"
 #end configuration section.
 
