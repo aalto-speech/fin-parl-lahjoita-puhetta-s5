@@ -1,0 +1,103 @@
+# ############################################################################
+# Model: Transformer LM of E2E ASR
+# ############################################################################
+
+# Seed needs to be set at top of yaml, before objects with parameters are made
+seed: 2224
+__set_seed: !apply:torch.manual_seed [!ref <seed>]
+num_units: 5000
+output_folder: !ref exp/lm/everything_trafo-A/bpe<num_units>-seed<seed>
+save_folder: !ref <output_folder>/save
+train_log: !ref <output_folder>/train_log.txt
+
+tokenizer_path: !ref exp/lm/train_lp_varikn.bpe<num_units>.d0.0001/bpe.<num_units>.model
+tokenizer: !new:sentencepiece.SentencePieceProcessor
+    model_file: !ref <tokenizer_path>
+
+# LM Data:
+train_data: data/lmdata_everything/plain_text
+valid_data: data/lmdata_everything/plain_text.valid
+
+# Training parameters
+number_of_epochs: 600
+dynbatch_kwargs:
+    len_key: "tokens_eos"
+    max_sample_len: 400
+    sampler_kwargs:
+        target_batch_numel: 320
+        max_batch_numel: 400
+
+lr: 1.
+accu_steps: 4 # Gradient accumulation to simulate large batch training
+ckpt_interval_minutes: -1 # save checkpoint every N min
+
+# Dataloader options
+train_dataloader_opts:
+    batch_size: null
+    pin_memory: False
+    num_workers: 1
+    looped_nominal_epoch: 20000
+    persistent_workers: True
+
+valid_dataloader_opts:
+    batch_size: 1
+
+test_dataloader_opts:
+    batch_size: 1
+
+test_min_key: "loss"
+test_dir: /your-test-path-here/
+testfile: !ref <test_dir>/text
+test_out: !ref <test_dir>/lm_cost.trafo_everything
+
+unk_index: 0 
+blank_index: 0
+pad_index: 0
+bos_index: 1
+eos_index: 2
+
+# model params
+d_model: 768
+
+# Functions
+model: !new:speechbrain.lobes.models.transformer.TransformerLM.TransformerLM  # yamllint disable-line rule:line-length
+    vocab: !ref <num_units>
+    d_model: !ref <d_model>
+    nhead: 12
+    num_encoder_layers: 12
+    num_decoder_layers: 0
+    d_ffn: 3072
+    dropout: 0.0
+    activation: !name:torch.nn.GELU
+    normalize_before: False
+
+modules:
+    model: !ref <model>
+
+log_softmax: !new:speechbrain.nnet.activations.Softmax
+    apply_log: True
+
+optimizer: !name:torch.optim.Adam
+    lr: 0
+    betas: (0.9, 0.98)
+    eps: 0.000000001
+
+lr_annealing: !new:speechbrain.nnet.schedulers.NoamScheduler
+    lr_initial: !ref <lr>
+    n_warmup_steps: 250000
+    model_size: !ref <d_model>
+
+epoch_counter: !new:speechbrain.utils.epoch_loop.EpochCounter
+    limit: !ref <number_of_epochs>
+
+compute_cost: !name:speechbrain.nnet.losses.nll_loss
+
+train_logger: !new:speechbrain.utils.train_logger.FileTrainLogger
+    save_file: !ref <train_log>
+
+checkpointer: !new:speechbrain.utils.checkpoints.Checkpointer
+    checkpoints_dir: !ref <save_folder>
+    recoverables:
+        model: !ref <model>
+        scheduler: !ref <lr_annealing>
+        counter: !ref <epoch_counter>

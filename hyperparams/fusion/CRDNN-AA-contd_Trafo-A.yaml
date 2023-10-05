@@ -1,0 +1,207 @@
+asr_seed: 2602
+lm_seed: 2224
+num_units: 5000
+
+output_folder: !ref exp/fusion/CRDNN-AA-contd_everything_trafo-A/<asr_seed>_<lm_seed>_<num_units>
+save_folder: !ref <output_folder>/save
+
+asr_folder: !ref exp/attention/CRDNN-AA-contd/<asr_seed>-<num_units>units
+lm_folder: !ref exp/lm/everything_trafo-A/bpe<num_units>-seed<lm_seed>
+
+validbatchsize: 4
+test_batch_size: 4
+
+tokenizer_path: !ref exp/lm/train_varikn.bpe<num_units>.d0.0001/bpe.<num_units>.model
+tokenizer: !new:sentencepiece.SentencePieceProcessor
+    model_file: !ref <tokenizer_path>
+
+# Feature parameters
+sample_rate: 16000
+n_fft: 400
+n_mels: 40
+
+# Model parameters
+activation: !name:torch.nn.LeakyReLU
+dropout: 0.15
+cnn_blocks: 2
+cnn_channels: (64, 128)
+inter_layer_pooling_size: (2, 2)
+cnn_kernelsize: (3, 3)
+time_pooling_size: 4
+rnn_class: !name:speechbrain.nnet.RNN.LSTM
+rnn_layers: 3
+rnn_neurons: 512
+rnn_bidirectional: True
+dnn_blocks: 1
+dnn_neurons: 512
+emb_size: 128
+dec_neurons: 1024
+dec_layers: 1
+output_neurons: !ref <num_units>  #Number of tokens (same as LM)
+
+unk_index: 0 
+blank_index: 0
+pad_index: 0
+bos_index: 1
+eos_index: 2
+
+# Decoding parameters
+test_data_dir: "data/dev_all/"
+test_data_id: "valid"
+min_decode_ratio: 0.0
+max_decode_ratio: 1.0
+valid_beam_size: 4
+test_beam_size: 12
+eos_threshold: 1.2
+using_max_attn_shift: False
+max_attn_shift: 240
+ctc_weight_decode: 0.0
+coverage_penalty: 3.0 
+temperature: 1.5
+lm_weight: 0.3
+temperature_lm: 1.0
+wer_file: !ref <output_folder>/wer_<test_data_id>_beam<test_beam_size>_cov<coverage_penalty>_eos<eos_threshold>_temp<temperature>_noattnshift_lm<lm_weight>.txt
+decode_text_file: !ref <output_folder>/text_<test_data_id>_beam<test_beam_size>_cov<coverage_penalty>_eos<eos_threshold>_temp<temperature>_noattnshift_lm<lm_weight>.txt
+
+# Feature extraction
+compute_features: !new:speechbrain.lobes.features.Fbank
+    sample_rate: !ref <sample_rate>
+    n_fft: !ref <n_fft>
+    n_mels: !ref <n_mels>
+
+# Feature normalization (mean and std)
+normalize: !new:speechbrain.processing.features.InputNormalization
+    norm_type: global
+    update_until_epoch: -1
+
+# The CRDNN model is an encoder that combines CNNs, RNNs, and DNNs.
+encoder: !new:speechbrain.lobes.models.CRDNN.CRDNN
+    input_shape: [null, null, !ref <n_mels>]
+    activation: !ref <activation>
+    dropout: !ref <dropout>
+    cnn_blocks: !ref <cnn_blocks>
+    cnn_channels: !ref <cnn_channels>
+    cnn_kernelsize: !ref <cnn_kernelsize>
+    inter_layer_pooling_size: !ref <inter_layer_pooling_size>
+    time_pooling: True
+    using_2d_pooling: False
+    time_pooling_size: !ref <time_pooling_size>
+    rnn_class: !ref <rnn_class>
+    rnn_layers: !ref <rnn_layers>
+    rnn_neurons: !ref <rnn_neurons>
+    rnn_bidirectional: !ref <rnn_bidirectional>
+    rnn_re_init: True
+    dnn_blocks: !ref <dnn_blocks>
+    dnn_neurons: !ref <dnn_neurons>
+    use_rnnp: False
+
+# Embedding (from indexes to an embedding space of dimension emb_size).
+embedding: !new:speechbrain.nnet.embedding.Embedding
+    num_embeddings: !ref <output_neurons>
+    embedding_dim: !ref <emb_size>
+
+# Attention-based RNN decoder.
+decoder: !new:local_RNN.AttentionalRNNDecoder
+    enc_dim: !ref <dnn_neurons>
+    input_size: !ref <emb_size>
+    rnn_type: gru
+    attn_type: location
+    hidden_size: !ref <dec_neurons>
+    attn_dim: 2048
+    num_layers: !ref <dec_layers>
+    scaling: 1.0
+    channels: 10
+    kernel_size: 100
+    re_init: True
+    dropout: !ref <dropout>
+
+# Linear transformation on the top of the encoder.
+ctc_lin: !new:speechbrain.nnet.linear.Linear
+    input_size: !ref <dnn_neurons>
+    n_neurons: !ref <output_neurons>
+
+# Linear transformation on the top of the decoder.
+seq_lin: !new:speechbrain.nnet.linear.Linear
+    input_size: !ref <dec_neurons>
+    n_neurons: !ref <output_neurons>
+
+
+# Gathering all the submodels in a single model object.
+asr_model: !new:torch.nn.ModuleList
+    - - !ref <encoder>
+      - !ref <embedding>
+      - !ref <decoder>
+      - !ref <ctc_lin>
+      - !ref <seq_lin>
+
+
+# model params
+d_model: 768
+
+# Functions
+lm: !new:speechbrain.lobes.models.transformer.TransformerLM.TransformerLM  # yamllint disable-line rule:line-length
+    vocab: !ref <num_units>
+    d_model: !ref <d_model>
+    nhead: 12
+    num_encoder_layers: 12
+    num_decoder_layers: 0
+    d_ffn: 3072
+    dropout: 0.0
+    activation: !name:torch.nn.GELU
+    normalize_before: False
+
+modules:
+    lm: !ref <lm>
+    encoder: !ref <encoder>
+    embedding: !ref <embedding>
+    decoder: !ref <decoder>
+    ctc_lin: !ref <ctc_lin>
+    seq_lin: !ref <seq_lin>
+    normalize: !ref <normalize>
+
+log_softmax: !new:speechbrain.nnet.activations.Softmax
+    apply_log: True
+
+test_search: !new:speechbrain.decoders.seq2seq.S2SRNNBeamSearchTransformerLM
+    embedding: !ref <embedding>
+    decoder: !ref <decoder>
+    linear: !ref <seq_lin>
+    bos_index: !ref <bos_index>
+    eos_index: !ref <eos_index>
+    blank_index: !ref <blank_index>
+    min_decode_ratio: !ref <min_decode_ratio>
+    max_decode_ratio: !ref <max_decode_ratio>
+    beam_size: !ref <test_beam_size>
+    eos_threshold: !ref <eos_threshold>
+    using_max_attn_shift: !ref <using_max_attn_shift>
+    max_attn_shift: !ref <max_attn_shift>
+    coverage_penalty: !ref <coverage_penalty>
+    temperature: !ref <temperature>
+    language_model: !ref <lm>
+    lm_weight: !ref <lm_weight>
+    temperature_lm: !ref <temperature_lm>
+
+# Functions that compute the statistics to track during the validation step.
+error_rate_computer: !name:speechbrain.utils.metric_stats.ErrorRateStats
+
+cer_computer: !name:speechbrain.utils.metric_stats.ErrorRateStats
+    split_tokens: True
+
+
+# Load the models:
+
+asr_ckpt_finder: !new:speechbrain.utils.checkpoints.Checkpointer
+    checkpoints_dir: !ref <asr_folder>/save
+asr_pretrainer: !new:speechbrain.utils.parameter_transfer.Pretrainer
+    collect_in: !ref <output_folder>/asr_ckpt_files
+    loadables:
+        model: !ref <asr_model>
+        normalizer: !ref <normalize>
+
+lm_ckpt_finder: !new:speechbrain.utils.checkpoints.Checkpointer
+    checkpoints_dir: !ref <lm_folder>/save
+lm_pretrainer: !new:speechbrain.utils.parameter_transfer.Pretrainer
+    collect_in: !ref <output_folder>/lm_ckpt_files
+    loadables:
+        model: !ref <lm>
+
